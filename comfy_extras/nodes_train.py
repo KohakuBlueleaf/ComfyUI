@@ -1031,7 +1031,7 @@ class TrainLoraNode(io.ComfyNode):
                     max=5,
                     tooltip="Depth level for gradient checkpointing.",
                 ),
-                io.Int.Input(
+                io.Boolean.Input(
                     "offloading",
                     default=False,
                     tooltip="Depth level for gradient checkpointing.",
