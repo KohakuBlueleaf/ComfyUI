@@ -1048,7 +1048,7 @@ class TrainLoraNode(io.ComfyNode):
                 io.Boolean.Input(
                     "offloading",
                     default=False,
-                    tooltip="Depth level for gradient checkpointing.",
+                    tooltip="Offload model weights to CPU during training to save GPU memory.",
                 ),
                 io.Combo.Input(
                     "existing_lora",
@@ -1362,7 +1362,7 @@ class SaveLoRA(io.ComfyNode):
                 io.Int.Input(
                     "steps",
                     optional=True,
-                    tooltip="Optional: The number of steps to LoRA has been trained for, used to name the saved file.",
+                    tooltip="Optional: The number of steps the LoRA has been trained for, used to name the saved file.",
                 ),
             ],
             outputs=[],
