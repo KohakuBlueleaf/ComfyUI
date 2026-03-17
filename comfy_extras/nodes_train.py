@@ -1030,6 +1030,11 @@ class TrainLoraNode(io.ComfyNode):
                     default="bf16",
                     tooltip="The dtype to use for lora.",
                 ),
+                io.Boolean.Input(
+                    "quantized_backward",
+                    default=False,
+                    tooltip="When using training_dtype 'none' and training on quantized model, doing backward with quantized matmul when enabled.",
+                ),
                 io.Combo.Input(
                     "algorithm",
                     options=list(adapter_maps.keys()),
@@ -1097,6 +1102,7 @@ class TrainLoraNode(io.ComfyNode):
         seed,
         training_dtype,
         lora_dtype,
+        quantized_backward,
         algorithm,
         gradient_checkpointing,
         checkpoint_depth,
@@ -1117,6 +1123,7 @@ class TrainLoraNode(io.ComfyNode):
         seed = seed[0]
         training_dtype = training_dtype[0]
         lora_dtype = lora_dtype[0]
+        quantized_backward = quantized_backward[0]
         algorithm = algorithm[0]
         gradient_checkpointing = gradient_checkpointing[0]
         offloading = offloading[0]
@@ -1124,6 +1131,8 @@ class TrainLoraNode(io.ComfyNode):
         existing_lora = existing_lora[0]
         bucket_mode = bucket_mode[0]
         bypass_mode = bypass_mode[0]
+
+        comfy.model_management.training_fp8_bwd = quantized_backward
 
         # Process latents based on mode
         if bucket_mode:
