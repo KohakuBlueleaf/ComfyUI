@@ -1194,11 +1194,6 @@ class TrainLoraNode(io.ComfyNode):
                     default=False,
                     tooltip="Enable bypass mode for training. When enabled, adapters are applied via forward hooks instead of weight modification. Useful for quantized models where weights cannot be directly modified.",
                 ),
-                io.Boolean.Input(
-                    "dev_run",
-                    default=False,
-                    tooltip="Developer profiling mode. Forces batch_size=1, steps=1, records CUDA memory history during fwd_bwd, and exports a memory snapshot to the output folder.",
-                ),
             ],
             outputs=[
                 io.Custom("LORA_MODEL").Output(
@@ -1234,7 +1229,6 @@ class TrainLoraNode(io.ComfyNode):
         existing_lora,
         bucket_mode,
         bypass_mode,
-        dev_run,
     ):
         # Extract scalars from lists (due to is_input_list=True)
         model = model[0]
@@ -1255,9 +1249,9 @@ class TrainLoraNode(io.ComfyNode):
         existing_lora = existing_lora[0]
         bucket_mode = bucket_mode[0]
         bypass_mode = bypass_mode[0]
-        dev_run = dev_run[0]
 
-        # Dev run mode: force batch_size=1, steps=1 for memory profiling
+        # Dev run mode (--dev-mode): force batch_size=1, steps=1 for memory profiling
+        dev_run = args.dev_mode
         if dev_run:
             logging.info("[DevRun] Enabled — forcing batch_size=1, steps=1 for memory profiling")
             batch_size = 1
