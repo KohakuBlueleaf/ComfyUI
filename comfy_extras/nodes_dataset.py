@@ -195,8 +195,10 @@ class LoadVideoDataSetFromFolderNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="LoadVideoDataSetFromFolder",
-            display_name="Load Video Dataset from Folder",
-            category="dataset",
+            search_aliases=["load folder", "load from folder", "load dataset", "load videos", "import dataset"],
+            display_name="Load Video (from Folder)",
+            category="video",
+            description="Load a dataset of videos from a specified folder and return a list of videos. Supported formats: MP4, AVI, MOV, WEBM, MKV, FLV.",
             is_experimental=True,
             inputs=[
                 io.Combo.Input(
@@ -235,8 +237,10 @@ class LoadVideoTextDataSetFromFolderNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="LoadVideoTextDataSetFromFolder",
-            display_name="Load Video and Text Dataset from Folder",
-            category="dataset",
+            search_aliases=["load folder", "load from folder", "load dataset", "load videos", "import dataset"],
+            display_name="Load Video-Text (from Folder)",
+            category="video",
+            description="Load a dataset of pairs of videos and text captions from a specified folder and return them as a list. Supported formats: MP4, AVI, MOV, WEBM, MKV, FLV.",
             is_experimental=True,
             inputs=[
                 io.Combo.Input(
@@ -1109,8 +1113,10 @@ class VideoFrameSampleNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="VideoFrameSample",
-            display_name="Video Frame Sample",
-            category="dataset/video",
+            search_aliases=["sample frames", "extract frames"],
+            display_name="Sample Video Frame",
+            category="video",
+            description="Sample a fixed number of frames from a video using various strategies.",
             is_experimental=True,
             inputs=[
                 io.Video.Input("video", tooltip="Input video."),
@@ -1177,8 +1183,10 @@ class VideoTemporalCropNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="VideoTemporalCrop",
-            display_name="Video Temporal Crop",
-            category="dataset/video",
+            search_aliases=["crop", "crop video", "temporal crop", "truncate video"],
+            display_name="Crop Video (Temporal)",
+            category="video/transform",
+            description="Crop a continuous range of frames from a video.",
             is_experimental=True,
             inputs=[
                 io.Video.Input("video", tooltip="Input video."),
@@ -1220,8 +1228,10 @@ class VideoRandomTemporalCropNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="VideoRandomTemporalCrop",
-            display_name="Video Random Temporal Crop",
-            category="dataset/video",
+            search_aliases=["crop", "crop video", "temporal crop", "truncate video", "random crop"],
+            display_name="Crop Video (Temporal Random)",
+            category="video/transform",
+            description="Randomly crop a continuous range of frames from a video.",
             is_experimental=True,
             inputs=[
                 io.Video.Input("video", tooltip="Input video."),
@@ -1265,8 +1275,10 @@ class ShuffleVideoDatasetNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="ShuffleVideoDataset",
-            display_name="Shuffle Video Dataset",
-            category="dataset/video",
+            search_aliases=["shuffle", "randomize", "mix"],
+            display_name="Shuffle Videos List",
+            category="video/batch",
+            description="Randomly shuffle the order of videos in a list.",
             is_experimental=True,
             is_input_list=True,
             inputs=[
@@ -1299,8 +1311,10 @@ class ShuffleVideoTextDatasetNode(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="ShuffleVideoTextDataset",
-            display_name="Shuffle Video-Text Dataset",
+            search_aliases=["shuffle", "randomize", "mix"],
+            display_name="Shuffle Pairs of Video-Text",
             category="dataset/video",
+            description="Randomly shuffle the order of pairs of video-text in a list.",
             is_experimental=True,
             is_input_list=True,
             inputs=[
