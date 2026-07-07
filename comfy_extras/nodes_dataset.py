@@ -59,18 +59,54 @@ def list_dataset_folders():
 
     Any subfolder containing a metadata.json or *.safetensors shard counts as
     a dataset; the walk doesn't descend into matched folders.
+
+    Symlinked directories are followed, but symlink loops are avoided.
     """
     found = set()
+
     for root in folder_paths.get_folder_paths("datasets"):
         if not os.path.isdir(root):
             continue
+
+        root = os.path.abspath(root)
+        seen_dirs = set()
+
         for dirpath, subdirs, filenames in os.walk(root, followlinks=True):
+            try:
+                st = os.stat(dirpath)  # follows symlinks
+            except OSError:
+                subdirs[:] = []
+                continue
+
+            dir_key = (st.st_dev, st.st_ino)
+            if dir_key in seen_dirs:
+                subdirs[:] = []
+                continue
+
+            seen_dirs.add(dir_key)
+
             if dirpath != root and (
                 "metadata.json" in filenames
                 or any(f.endswith(".safetensors") for f in filenames)
             ):
                 found.add(os.path.relpath(dirpath, root).replace(os.sep, "/"))
                 subdirs[:] = []
+                continue
+
+            kept_subdirs = []
+            for name in subdirs:
+                child = os.path.join(dirpath, name)
+                try:
+                    child_st = os.stat(child)  # follows symlinks
+                except OSError:
+                    continue
+
+                child_key = (child_st.st_dev, child_st.st_ino)
+                if child_key not in seen_dirs:
+                    kept_subdirs.append(name)
+
+            subdirs[:] = kept_subdirs
+
     return sorted(found)
 
 
