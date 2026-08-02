@@ -5,12 +5,14 @@ import json
 import av
 import numpy as np
 import torch
+import torchaudio
 from PIL import Image
 from typing_extensions import override
 
 import folder_paths
 import node_helpers
 from comfy_api.latest import ComfyExtension, io, Input, InputImpl, Types
+from comfy_extras.nodes_audio import load as load_audio_file
 
 
 def load_and_process_images(image_files, input_dir):
@@ -1650,6 +1652,499 @@ class MergeTextListsNode(TextProcessingNode):
         return texts
 
 
+# ========== Audio Dataset Nodes ==========
+
+AUDIO_EXTENSIONS = [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus"]
+
+
+def load_audio_files(audio_files, input_dir):
+    if not audio_files:
+        raise ValueError("No valid audio files found in input")
+
+    output_audio = []
+    for file in audio_files:
+        audio_path = os.path.join(input_dir, file)
+        waveform, sample_rate = load_audio_file(audio_path)
+        output_audio.append({"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate})
+    return output_audio
+
+
+class LoadAudioDataSetFromFolderNode(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LoadAudioDataSetFromFolder",
+            search_aliases=["load folder", "load from folder", "load dataset", "load audio", "import dataset"],
+            display_name="Load Audio (from Folder)",
+            category="audio",
+            description="Load a dataset of audio files from a specified folder and return a list of audio. Supported formats: WAV, MP3, FLAC, OGG, M4A, OPUS.",
+            is_experimental=True,
+            inputs=[
+                io.Combo.Input(
+                    "folder",
+                    options=folder_paths.get_input_subfolders(),
+                    tooltip="The folder to load audio files from.",
+                )
+            ],
+            outputs=[
+                io.Audio.Output(
+                    display_name="audios",
+                    is_output_list=True,
+                    tooltip="List of loaded audio",
+                )
+            ],
+        )
+
+    @classmethod
+    def execute(cls, folder):
+        sub_input_dir = os.path.join(folder_paths.get_input_directory(), folder)
+        audio_files = [
+            f
+            for f in os.listdir(sub_input_dir)
+            if any(f.lower().endswith(ext) for ext in AUDIO_EXTENSIONS)
+        ]
+        output_audio = load_audio_files(audio_files, sub_input_dir)
+        return io.NodeOutput(output_audio)
+
+
+class LoadAudioTextDataSetFromFolderNode(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LoadAudioTextDataSetFromFolder",
+            search_aliases=["load folder", "load from folder", "load dataset", "load audio", "import dataset"],
+            display_name="Load Audio-Text (from Folder)",
+            category="audio",
+            description="Load a dataset of pairs of audio files and text captions from a specified folder and return them as a list. Supported formats: WAV, MP3, FLAC, OGG, M4A, OPUS.",
+            is_experimental=True,
+            inputs=[
+                io.Combo.Input(
+                    "folder",
+                    options=folder_paths.get_input_subfolders(),
+                    tooltip="The folder to load audio files and text captions from.",
+                )
+            ],
+            outputs=[
+                io.Audio.Output(
+                    display_name="audios",
+                    is_output_list=True,
+                    tooltip="List of loaded audio",
+                ),
+                io.String.Output(
+                    display_name="texts",
+                    is_output_list=True,
+                    tooltip="List of text captions",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, folder):
+        logging.info(f"Loading audio from folder: {folder}")
+
+        sub_input_dir = os.path.join(folder_paths.get_input_directory(), folder)
+
+        audio_files = []
+        for item in os.listdir(sub_input_dir):
+            path = os.path.join(sub_input_dir, item)
+            if any(item.lower().endswith(ext) for ext in AUDIO_EXTENSIONS):
+                audio_files.append(item)
+            elif os.path.isdir(path):
+                # Support kohya-ss/sd-scripts folder structure
+                repeat = 1
+                if item.split("_")[0].isdigit():
+                    repeat = int(item.split("_")[0])
+                audio_files.extend(
+                    [
+                        os.path.join(path, f)
+                        for f in os.listdir(path)
+                        if any(f.lower().endswith(ext) for ext in AUDIO_EXTENSIONS)
+                    ]
+                    * repeat
+                )
+
+        caption_file_path = [
+            f.replace(os.path.splitext(f)[1], ".txt") for f in audio_files
+        ]
+        captions = []
+        for caption_file in caption_file_path:
+            caption_path = os.path.join(sub_input_dir, caption_file)
+            if os.path.exists(caption_path):
+                with open(caption_path, "r", encoding="utf-8") as f:
+                    captions.append(f.read().strip())
+            else:
+                captions.append("")
+
+        output_audio = load_audio_files(audio_files, sub_input_dir)
+
+        logging.info(f"Loaded {len(output_audio)} audio files from {sub_input_dir}.")
+        return io.NodeOutput(output_audio, captions)
+
+
+class AudioProcessingNode(io.ComfyNode):
+    """Base class for audio processing nodes, mirroring ImageProcessingNode.
+
+    Child classes must implement ONE of:
+        _process(cls, audio, **kwargs) -> audio dict  (for single-item processing)
+        _group_process(cls, audios, **kwargs) -> list[audio dict]  (for group processing)
+    """
+
+    node_id = None
+    search_aliases = []
+    display_name = None
+    description = None
+    extra_inputs = []
+    is_group_process = None
+    is_output_list = None
+    is_deprecated = False
+
+    @classmethod
+    def _detect_processing_mode(cls):
+        if cls.is_group_process is not None:
+            return cls.is_group_process
+
+        base_class = AudioProcessingNode
+
+        process_definer = None
+        for klass in cls.__mro__:
+            if "_process" in klass.__dict__:
+                process_definer = klass
+                break
+
+        group_definer = None
+        for klass in cls.__mro__:
+            if "_group_process" in klass.__dict__:
+                group_definer = klass
+                break
+
+        has_process = process_definer is not None and process_definer is not base_class
+        has_group = group_definer is not None and group_definer is not base_class
+
+        if has_process and has_group:
+            raise ValueError(
+                f"{cls.__name__}: Cannot override both _process and _group_process. "
+                "Override only one, or set is_group_process explicitly."
+            )
+        if not has_process and not has_group:
+            raise ValueError(
+                f"{cls.__name__}: Must override either _process or _group_process"
+            )
+
+        return has_group
+
+    @classmethod
+    def _ensure_audio_list(cls, audios):
+        flat = []
+        for item in audios:
+            waveform = item["waveform"]
+            if not isinstance(waveform, torch.Tensor) or waveform.ndim != 3:
+                raise ValueError(f"Expected 3D audio waveform, got {type(waveform).__name__} shape {getattr(waveform, 'shape', None)}")
+            if waveform.shape[0] == 1:
+                flat.append(item)
+            else:
+                flat.extend(
+                    {"waveform": waveform[i:i+1], "sample_rate": item["sample_rate"]}
+                    for i in range(waveform.shape[0])
+                )
+        return flat
+
+    @classmethod
+    def define_schema(cls):
+        if cls.node_id is None:
+            raise NotImplementedError(f"{cls.__name__} must set node_id class variable")
+
+        is_group = cls._detect_processing_mode()
+
+        output_is_list = (
+            cls.is_output_list if cls.is_output_list is not None else is_group
+        )
+
+        inputs = [
+            io.Audio.Input(
+                "audios",
+                tooltip=(
+                    "List of audio to process." if is_group else "Audio to process."
+                ),
+            )
+        ]
+        inputs.extend(cls.extra_inputs)
+
+        return io.Schema(
+            node_id=cls.node_id,
+            search_aliases=cls.search_aliases,
+            display_name=cls.display_name or cls.node_id,
+            category=cls.category,
+            description=cls.description,
+            is_experimental=True,
+            is_input_list=is_group,
+            inputs=inputs,
+            outputs=[
+                io.Audio.Output(
+                    display_name="audios",
+                    is_output_list=output_is_list,
+                    tooltip="Processed audio",
+                )
+            ],
+        )
+
+    @classmethod
+    def execute(cls, audios, **kwargs):
+        is_group = cls._detect_processing_mode()
+
+        if is_group:
+            audios = cls._ensure_audio_list(audios)
+
+        params = {}
+        for k, v in kwargs.items():
+            if isinstance(v, list) and len(v) == 1:
+                params[k] = v[0]
+            else:
+                params[k] = v
+
+        if is_group:
+            result = cls._group_process(audios, **params)
+        else:
+            result = cls._process(audios, **params)
+
+        return io.NodeOutput(result)
+
+    @classmethod
+    def _process(cls, audio, **kwargs):
+        raise NotImplementedError(f"{cls.__name__} must implement _process method")
+
+    @classmethod
+    def _group_process(cls, audios, **kwargs):
+        raise NotImplementedError(
+            f"{cls.__name__} must implement _group_process method"
+        )
+
+
+class RandomCropAudioNode(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="RandomCropAudio",
+            search_aliases=["crop", "cut", "trim", "random window"],
+            display_name="Crop Audio (Random)",
+            category="audio/transform",
+            description="Randomly crop each audio to the specified duration. Outputs the crop offsets and original durations for timing conditioning (e.g. Stable Audio).",
+            is_experimental=True,
+            is_input_list=True,
+            inputs=[
+                io.Audio.Input("audios", tooltip="List of audio to crop."),
+                io.Float.Input(
+                    "duration",
+                    default=47.6,
+                    min=0.1,
+                    max=1000.0,
+                    step=0.1,
+                    tooltip="Crop duration in seconds. Audio shorter than this is kept unchanged.",
+                ),
+                io.Int.Input(
+                    "seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF, tooltip="Random seed."
+                ),
+            ],
+            outputs=[
+                io.Audio.Output(
+                    display_name="audios",
+                    is_output_list=True,
+                    tooltip="Cropped audio",
+                ),
+                io.Float.Output(
+                    display_name="seconds_start",
+                    is_output_list=True,
+                    tooltip="Crop start offset in seconds, per sample",
+                ),
+                io.Float.Output(
+                    display_name="seconds_total",
+                    is_output_list=True,
+                    tooltip="Original duration in seconds, per sample",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, audios, duration, seed):
+        duration = duration[0]
+        seed = seed[0]
+        np.random.seed(seed % (2**32 - 1))
+
+        cropped = []
+        seconds_start = []
+        seconds_total = []
+        for audio in audios:
+            waveform = audio["waveform"]
+            sample_rate = audio["sample_rate"]
+            length = waveform.shape[-1]
+            crop_length = int(round(duration * sample_rate))
+
+            if length <= crop_length:
+                start = 0
+            else:
+                start = int(np.random.randint(0, length - crop_length + 1))
+                waveform = waveform[..., start:start + crop_length]
+
+            cropped.append({"waveform": waveform, "sample_rate": sample_rate})
+            seconds_start.append(start / sample_rate)
+            seconds_total.append(length / sample_rate)
+
+        return io.NodeOutput(cropped, seconds_start, seconds_total)
+
+
+class QuantizeAudioDurationNode(AudioProcessingNode):
+    node_id = "QuantizeAudioDuration"
+    search_aliases = ["duration bucket", "pad audio", "align duration"]
+    display_name = "Quantize Audio Duration"
+    category = "audio/transform"
+    description = "Crop or pad each audio so its duration is a multiple of the given step. Use before Resolution Bucket so samples share bucketable lengths."
+    extra_inputs = [
+        io.Float.Input(
+            "step_seconds",
+            default=5.0,
+            min=0.1,
+            max=1000.0,
+            step=0.1,
+            tooltip="Duration step in seconds.",
+        ),
+        io.Combo.Input(
+            "mode",
+            options=["crop", "pad"],
+            default="crop",
+            tooltip="crop: shorten to the largest multiple of the step. pad: extend with silence to the next multiple.",
+        ),
+    ]
+
+    @classmethod
+    def _process(cls, audio, step_seconds, mode):
+        waveform = audio["waveform"]
+        sample_rate = audio["sample_rate"]
+        length = waveform.shape[-1]
+        step = max(1, int(round(step_seconds * sample_rate)))
+
+        if mode == "crop":
+            target = max(step, (length // step) * step)
+        else:
+            target = ((length + step - 1) // step) * step
+
+        if target < length:
+            waveform = waveform[..., :target]
+        elif target > length:
+            pad_shape = list(waveform.shape)
+            pad_shape[-1] = target - length
+            waveform = torch.cat(
+                [waveform, torch.zeros(pad_shape, dtype=waveform.dtype, device=waveform.device)],
+                dim=-1,
+            )
+
+        return {"waveform": waveform, "sample_rate": sample_rate}
+
+
+class NormalizeAudioLoudnessNode(AudioProcessingNode):
+    node_id = "NormalizeAudioLoudness"
+    search_aliases = ["normalize", "loudness", "lufs", "peak"]
+    display_name = "Normalize Audio Loudness"
+    category = "audio/transform"
+    description = "Normalize each audio to a target loudness. peak: scale so the maximum amplitude hits the target. lufs: scale to a target integrated loudness (ITU-R BS.1770)."
+    extra_inputs = [
+        io.Combo.Input(
+            "method",
+            options=["peak", "lufs"],
+            default="peak",
+            tooltip="Loudness measurement method.",
+        ),
+        io.Float.Input(
+            "target_db",
+            default=-1.0,
+            min=-70.0,
+            max=0.0,
+            step=0.1,
+            tooltip="Target level in dB (peak) or LUFS (lufs). Typical values: -1.0 for peak, -14.0 for lufs.",
+        ),
+    ]
+
+    @classmethod
+    def _process(cls, audio, method, target_db):
+        waveform = audio["waveform"]
+        sample_rate = audio["sample_rate"]
+
+        if method == "peak":
+            peak = waveform.abs().amax()
+            if peak > 0:
+                waveform = waveform * (10 ** (target_db / 20) / peak)
+        else:
+            current = torchaudio.functional.loudness(waveform[0], sample_rate)
+            if torch.isfinite(current):
+                waveform = waveform * (10 ** ((target_db - current.item()) / 20))
+            else:
+                logging.warning("NormalizeAudioLoudness: could not measure loudness (silent or too short), audio left unchanged.")
+
+        return {"waveform": waveform, "sample_rate": sample_rate}
+
+
+class ShuffleAudioDatasetNode(AudioProcessingNode):
+    node_id = "ShuffleAudioDataset"
+    search_aliases = ["shuffle", "randomize", "mix"]
+    display_name = "Shuffle Audios List"
+    category = "audio/batch"
+    description = "Randomly shuffle the order of audio in a list."
+    is_group_process = True
+    extra_inputs = [
+        io.Int.Input(
+            "seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF, tooltip="Random seed."
+        ),
+    ]
+
+    @classmethod
+    def _group_process(cls, audios, seed):
+        np.random.seed(seed % (2**32 - 1))
+        indices = np.random.permutation(len(audios))
+        return [audios[i] for i in indices]
+
+
+class ShuffleAudioTextDatasetNode(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="ShuffleAudioTextDataset",
+            search_aliases=["shuffle", "randomize", "mix"],
+            display_name="Shuffle Pairs of Audio-Text",
+            category="audio/batch",
+            description="Randomly shuffle the order of pairs of audio-text in a list.",
+            is_experimental=True,
+            is_input_list=True,
+            inputs=[
+                io.Audio.Input("audios", tooltip="List of audio to shuffle."),
+                io.String.Input("texts", tooltip="List of texts to shuffle.", force_input=True),
+                io.Int.Input(
+                    "seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    tooltip="Random seed.",
+                ),
+            ],
+            outputs=[
+                io.Audio.Output(
+                    display_name="audios",
+                    is_output_list=True,
+                    tooltip="Shuffled audio",
+                ),
+                io.String.Output(
+                    display_name="texts", is_output_list=True, tooltip="Shuffled texts"
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, audios, texts, seed):
+        seed = seed[0]
+        np.random.seed(seed % (2**32 - 1))
+        indices = np.random.permutation(len(audios))
+        shuffled_audios = [audios[i] for i in indices]
+        shuffled_texts = [texts[i] for i in indices]
+        return io.NodeOutput(shuffled_audios, shuffled_texts)
+
+
 # ========== Training Dataset Nodes ==========
 
 
@@ -1749,21 +2244,25 @@ class ResolutionBucket(io.ComfyNode):
 
 
 class MakeTrainingDataset(io.ComfyNode):
-    """Encode images with VAE and texts with CLIP to create a training dataset."""
+    """Encode images or audio with VAE and texts with CLIP to create a training dataset."""
     @classmethod
     def define_schema(cls):
         return io.Schema(
             node_id="MakeTrainingDataset",
-            search_aliases=["encode dataset"],
+            search_aliases=["encode dataset", "encode audio dataset"],
             display_name="Make Training Dataset",
             category="model/training",
-            description="Encode images with VAE and texts with CLIP to create a training dataset of latents and conditionings.",
+            description="Encode images or audio with VAE and texts with CLIP to create a training dataset of latents and conditionings.",
             is_experimental=True,
-            is_input_list=True,  # images and texts as lists
+            is_input_list=True,
             inputs=[
-                io.Image.Input("images", tooltip="List of images to encode."),
+                io.MultiType.Input(
+                    "media",
+                    [io.Image, io.Audio],
+                    tooltip="List of images or audio clips to encode.",
+                ),
                 io.Vae.Input(
-                    "vae", tooltip="VAE model for encoding images to latents."
+                    "vae", tooltip="VAE model for encoding media to latents."
                 ),
                 io.Clip.Input(
                     "clip", tooltip="CLIP model for encoding text to conditioning."
@@ -1771,7 +2270,7 @@ class MakeTrainingDataset(io.ComfyNode):
                 io.String.Input(
                     "texts",
                     optional=True,
-                    tooltip="List of text captions. Can be length n (matching images), 1 (repeated for all), or omitted (uses empty string).",
+                    tooltip="List of text captions. Can be length n (matching media), 1 (repeated for all), or omitted (uses empty string).",
                     force_input=True
                 ),
             ],
@@ -1790,38 +2289,42 @@ class MakeTrainingDataset(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images, vae, clip, texts=None):
-        # Extract scalars (vae and clip are single values wrapped in lists)
+    def execute(cls, media, vae, clip, texts=None):
         vae = vae[0]
         clip = clip[0]
 
-        # Handle text list
-        num_images = len(images)
+        num_items = len(media)
 
         if texts is None or len(texts) == 0:
-            # Treat as [""] for unconditional training
             texts = [""]
 
-        if len(texts) == 1 and num_images > 1:
-            # Repeat single text for all images
-            texts = texts * num_images
-        elif len(texts) != num_images:
+        if len(texts) == 1 and num_items > 1:
+            texts = texts * num_items
+        elif len(texts) != num_items:
             raise ValueError(
-                f"Number of texts ({len(texts)}) does not match number of images ({num_images}). "
-                f"Text list should have length {num_images}, 1, or 0."
+                f"Number of texts ({len(texts)}) does not match number of media items ({num_items}). "
+                f"Text list should have length {num_items}, 1, or 0."
             )
 
-        # Encode images with VAE
-        logging.info(f"Encoding {num_images} images with VAE...")
-        latents_list = []  # list[{"samples": tensor}]
-        for img_tensor in images:
-            # img_tensor is [1, H, W, 3]
-            latent_tensor = vae.encode(img_tensor[:, :, :, :3])
-            latents_list.append({"samples": latent_tensor})
+        # Detect media type from first item
+        is_audio = isinstance(media[0], dict) and "waveform" in media[0]
+
+        latents_list = []
+        if is_audio:
+            logging.info(f"Encoding {num_items} audio clips with VAE...")
+            for item in media:
+                waveform = item["waveform"]  # [1, channels, samples]
+                latent_tensor = vae.encode(waveform.movedim(1, -1))
+                latents_list.append({"samples": latent_tensor})
+        else:
+            logging.info(f"Encoding {num_items} images with VAE...")
+            for img_tensor in media:
+                latent_tensor = vae.encode(img_tensor[:, :, :, :3])
+                latents_list.append({"samples": latent_tensor})
 
         # Encode texts with CLIP
         logging.info(f"Encoding {len(texts)} texts with CLIP...")
-        conditioning_list = []  # list[list[cond]]
+        conditioning_list = []
         for text in texts:
             if text == "":
                 cond = clip.encode_from_tokens_scheduled(clip.tokenize(""))
@@ -2026,6 +2529,8 @@ class DatasetExtension(ComfyExtension):
             LoadImageTextDataSetFromFolderNode,
             SaveImageDataSetToFolderNode,
             SaveImageTextDataSetToFolderNode,
+            LoadAudioDataSetFromFolderNode,
+            LoadAudioTextDataSetFromFolderNode,
             # Video data loading nodes
             LoadVideoDataSetFromFolderNode,
             LoadVideoTextDataSetFromFolderNode,
@@ -2058,6 +2563,12 @@ class DatasetExtension(ComfyExtension):
             ImageGridNode,
             MergeImageListsNode,
             MergeTextListsNode,
+            # Audio dataset nodes
+            RandomCropAudioNode,
+            QuantizeAudioDurationNode,
+            NormalizeAudioLoudnessNode,
+            ShuffleAudioDatasetNode,
+            ShuffleAudioTextDatasetNode,
             # Training dataset nodes
             MakeTrainingDataset,
             SaveTrainingDataset,
