@@ -115,8 +115,14 @@ def has_custom_bypass(adapter: BypassAdapter) -> bool:
 
 
 def is_transposed_conv(module: nn.Module) -> bool:
-    """Whether the module is a transposed conv, by class or by class name for custom/quantized layers."""
-    return isinstance(module, nn.modules.conv._ConvTransposeNd) or "transpose" in type(module).__name__.lower()
+    """Whether the module is a transposed conv, by class or, for custom/quantized conv layers, by a
+    class name holding both "conv" and "transpose"; linear layers never are."""
+    if isinstance(module, nn.modules.conv._ConvTransposeNd):
+        return True
+    if isinstance(module, nn.Linear):
+        return False
+    name = type(module).__name__.lower()
+    return "conv" in name and "transpose" in name
 
 
 def output_features(module: nn.Module) -> Optional[int]:

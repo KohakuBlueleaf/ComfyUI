@@ -9,7 +9,10 @@ import comfy.lora  # noqa: E402
 import comfy.model_management  # noqa: E402
 import comfy.model_patcher  # noqa: E402
 import comfy.sd  # noqa: E402
-from comfy.weight_adapter.bypass import BypassInjectionManager  # noqa: E402
+from comfy.weight_adapter.bypass import (  # noqa: E402
+    BypassInjectionManager,
+    is_transposed_conv,
+)
 from comfy.weight_adapter.glora import GLoRAAdapter  # noqa: E402
 from comfy.weight_adapter.loha import LoHaAdapter  # noqa: E402
 from comfy.weight_adapter.lokr import LoKrAdapter  # noqa: E402
@@ -223,6 +226,18 @@ def test_rejects_slice_on_transposed_conv(setup):
 
     with pytest.raises(ValueError, match="transposed conv"):
         manager.create_injections(model)
+
+
+def test_transposed_conv_check_by_class_name():
+    class TransposeLinear(torch.nn.Linear):
+        pass
+
+    class QuantConvTranspose2d(torch.nn.Module):
+        pass
+
+    assert not is_transposed_conv(TransposeLinear(DIM, DIM))
+    assert is_transposed_conv(QuantConvTranspose2d())
+    assert not is_transposed_conv(torch.nn.Conv2d(DIM, DIM, 1))
 
 
 def test_injection_name_skips_names_in_use(setup):
