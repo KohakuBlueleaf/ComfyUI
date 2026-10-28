@@ -114,6 +114,11 @@ def has_custom_bypass(adapter: BypassAdapter) -> bool:
     )
 
 
+def is_transposed_conv(module: nn.Module) -> bool:
+    """Whether the module is a transposed conv, by class or by class name for custom/quantized layers."""
+    return isinstance(module, nn.modules.conv._ConvTransposeNd) or "transpose" in type(module).__name__.lower()
+
+
 def output_features(module: nn.Module) -> Optional[int]:
     """Output features (Linear) or channels (conv) of a module, from its attributes or weight shape."""
     info = get_module_type_info(module)
@@ -351,6 +356,10 @@ class BypassInjectionManager:
                 dim 0 (output features) is supported
         """
         if offset is not None:
+            if offset[1] < 0 or offset[2] <= 0:
+                raise ValueError(
+                    f"[BypassManager] {key}: slice {offset} needs a non-negative start and a positive size"
+                )
             if offset[0] != 0:
                 raise ValueError(
                     f"[BypassManager] {key}: adapter targets a slice of weight dim {offset[0]}; "
@@ -434,6 +443,11 @@ class BypassInjectionManager:
 
             features = output_features(module)
             for _, _, offset in entries:
+                if offset is not None and is_transposed_conv(module):
+                    raise ValueError(
+                        f"[BypassManager] {key}: weight dim 0 of a transposed conv is its input channels; "
+                        f"the slice {offset} has no output-channel form"
+                    )
                 if offset is not None and features is not None and offset[1] + offset[2] > features:
                     raise ValueError(
                         f"[BypassManager] {key}: slice {offset} exceeds the module's {features} output features"

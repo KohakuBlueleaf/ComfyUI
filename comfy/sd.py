@@ -165,8 +165,10 @@ def _add_bypass_adapters(manager, bypass_patches, sd_keys, strength, loaded_keys
 
 def _bypass_injection_name(patcher):
     """A name not used by an earlier bypass load on this patcher, so chained loads stack."""
-    used = sum(1 for name in patcher.injections if name.startswith("bypass_lora"))
-    return "bypass_lora_{}".format(used)
+    n = 0
+    while "bypass_lora_{}".format(n) in patcher.injections:
+        n += 1
+    return "bypass_lora_{}".format(n)
 
 
 def load_bypass_lora_for_models(model, clip, lora, strength_model, strength_clip):

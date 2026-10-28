@@ -203,9 +203,39 @@ def test_rejects_unsupported_slices(setup):
         manager.add_adapter(KEY, make_adapter("lora", generator), offset=(1, 0, DIM))
     with pytest.raises(ValueError, match="rewrites the module input"):
         manager.add_adapter(KEY, GLoRAAdapter(set(), (None,) * 6), offset=SLICES["q"])
+    for bad in ((0, -1, 1), (0, 0, -1), (0, 0, 0)):
+        with pytest.raises(ValueError, match="non-negative start"):
+            manager.add_adapter(KEY, make_adapter("lora", generator), offset=bad)
 
     manager.add_adapter(
         KEY, make_adapter("lora", generator), offset=(0, 2 * DIM, 2 * DIM)
     )
     with pytest.raises(ValueError, match="exceeds"):
         manager.create_injections(model)
+
+
+def test_rejects_slice_on_transposed_conv(setup):
+    _, _, generator = setup
+    model = torch.nn.Module()
+    model.qkv = torch.nn.ConvTranspose2d(3 * DIM, DIM, 1, bias=False)
+    manager = BypassInjectionManager()
+    manager.add_adapter(KEY, make_adapter("lora", generator), offset=SLICES["k"])
+
+    with pytest.raises(ValueError, match="transposed conv"):
+        manager.create_injections(model)
+
+
+def test_injection_name_skips_names_in_use(setup):
+    model, _, _ = setup
+    patcher = comfy.model_patcher.ModelPatcher(
+        model, torch.device("cpu"), torch.device("cpu")
+    )
+    for _ in range(2):
+        patcher.set_injections(comfy.sd._bypass_injection_name(patcher), [])
+    patcher.remove_injections("bypass_lora_0")
+
+    name = comfy.sd._bypass_injection_name(patcher)
+
+    assert name == "bypass_lora_0"
+    patcher.set_injections(name, [])
+    assert comfy.sd._bypass_injection_name(patcher) == "bypass_lora_2"
